@@ -8,10 +8,35 @@ import subprocess
 
 import numpy as np
 import torch
+from hydra.utils import instantiate
 from omegaconf import OmegaConf
 
 from src.logger.logger import setup_logging
 from src.utils.io_utils import ROOT_PATH
+
+
+def setup_writer(config):
+    """
+    Create an experiment-tracker writer if a Comet API key is available.
+
+    Logging is enabled only when the COMET_API_KEY environment variable is set
+    (and comet_ml is installed); otherwise None is returned and nothing is
+    logged remotely. Used by inference and speed measurement.
+
+    Args:
+        config (DictConfig): hydra experiment config with a 'writer' group.
+    Returns:
+        writer | None: the writer if a Comet API key is set, else None.
+    """
+    if not os.environ.get("COMET_API_KEY"):
+        return None
+    try:
+        import comet_ml  # noqa: F401
+    except ImportError:
+        return None
+    logger = logging.getLogger("writer")
+    project_config = OmegaConf.to_container(config)
+    return instantiate(config.writer, logger, project_config)
 
 
 def get_device(device):

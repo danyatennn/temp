@@ -5,7 +5,7 @@ import hydra
 import torch
 from hydra.utils import instantiate
 
-from src.utils.init_utils import get_device
+from src.utils.init_utils import get_device, setup_writer
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -46,8 +46,14 @@ def main(config):
             torch.cuda.synchronize()
         elapsed = time.perf_counter() - start
 
+    avg_ms = elapsed / n_runs * 1000
     print(f"Device: {device}")
-    print(f"Average reconstruction time: {elapsed / n_runs * 1000:.1f} ms")
+    print(f"Average reconstruction time: {avg_ms:.1f} ms")
+
+    writer = setup_writer(config)
+    if writer is not None:
+        writer.set_step(0, mode="speed")
+        writer.add_scalar("reconstruction_time_ms", avg_ms)
 
 
 if __name__ == "__main__":
