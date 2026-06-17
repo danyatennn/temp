@@ -67,6 +67,26 @@ Implementation notes:
 - Training loss is `MSE + LPIPS (VGG)` computed on the region of interest (ROI).
 - Metrics are PSNR, SSIM, LPIPS (VGG), and MSE, also computed on the ROI.
 
+### Bonus methods
+
+| Config | Description | Trainable params |
+|---|---|---|
+| [`fista`](src/configs/model/fista.yaml) | FISTA, 100 iters, fixed (non-ADMM solver) | 0 |
+| [`fista_unrolled`](src/configs/model/fista_unrolled.yaml) | Unrolled FISTA, 20 iters, learnable | 40 |
+| [`admm100_realesrgan`](src/configs/model/admm100_realesrgan.yaml) | ADMM-100 + frozen pretrained Real-ESRGAN | 0 |
+| [`admm100_realesrgan_ft`](src/configs/model/admm100_realesrgan_ft.yaml) | ADMM-100 + fine-tuned Real-ESRGAN | 16.7M |
+
+- **FISTA** ([`src/model/fista.py`](src/model/fista.py)) is a non-ADMM solver:
+  accelerated proximal gradient on the data term with an anisotropic-TV prior
+  (solved by Chambolle dual iterations) and a non-negativity constraint. It uses
+  the same padded Fourier forward model as the ADMM, so the comparison is direct.
+- **Real-ESRGAN** ([`src/model/realesrgan.py`](src/model/realesrgan.py)) is a
+  general-purpose restoration GAN. The RRDBNet generator is reimplemented here
+  with the official layer names so the published pretrained weights load
+  directly. It runs as a post-processor on top of the fixed ADMM-100 output
+  (4x upscaling, resized back to the input resolution). The `_ft` variant
+  unfreezes the generator for fine-tuning on the training split.
+
 ## Installation
 
 ```bash
@@ -116,6 +136,19 @@ python3 train.py -cn=lensless model=modular_pre      writer.run_name=modular_pre
 python3 train.py -cn=lensless model=modular_post     writer.run_name=modular_post
 ```
 
+Bonus learnable models (see [Bonus methods](#bonus-methods)):
+
+```bash
+# unrolled FISTA (non-ADMM solver)
+python3 train.py -cn=lensless model=fista_unrolled writer.run_name=fista_unrolled
+
+# fine-tune Real-ESRGAN on top of fixed ADMM-100 (lower lr, fewer epochs;
+# ADMM-100 runs each step, so use a small batch size)
+python3 train.py -cn=lensless model=admm100_realesrgan_ft \
+    optimizer.lr=1e-5 trainer.n_epochs=10 dataloader.batch_size=2 \
+    writer.run_name=realesrgan_ft
+```
+
 Useful overrides:
 
 - `trainer.n_epochs=N` — number of epochs (default 25).
@@ -151,6 +184,19 @@ python3 inference.py \
     inferencer.save_path=data/saved/admm100
 ```
 
+Bonus methods. FISTA and the frozen ADMM-100 + Real-ESRGAN have no checkpoint;
+the fine-tuned Real-ESRGAN does:
+
+```bash
+python3 inference.py model=fista inferencer.from_pretrained=null \
+    inferencer.save_path=data/saved/fista
+python3 inference.py model=admm100_realesrgan inferencer.from_pretrained=null \
+    inferencer.save_path=data/saved/admm100_realesrgan
+python3 inference.py model=admm100_realesrgan_ft \
+    inferencer.from_pretrained=saved/realesrgan_ft/model_best.pth \
+    inferencer.save_path=data/saved/realesrgan_ft
+```
+
 Run on a custom directory (see [Demo](#demo) for the format):
 
 ```bash
@@ -162,6 +208,18 @@ python3 inference.py \
 ```
 
 Reconstructions are saved as `ID.png` (the ROI) matching the input image id.
+
+Inference logging to Comet ML is automatic but optional: if the `COMET_API_KEY`
+environment variable is set, the final metrics and a few reconstruction examples
+are logged to Comet ML; otherwise nothing is logged remotely (the metrics are
+still printed and the images are still saved). Enable it with:
+
+```bash
+export COMET_API_KEY=your_key
+python3 inference.py model=modular_pre_post \
+    inferencer.from_pretrained=saved/modular_pre_post/model_best.pth \
+    inferencer.save_path=data/saved/modular_pre_post writer.run_name=modular_pre_post
+```
 
 Compute metrics between ground-truth and reconstructed images:
 
@@ -216,7 +274,7 @@ link), visualizes samples, and computes the metrics.
 └── src/
     ├── configs/             # Hydra configs
     ├── datasets/            # DigiCam and custom-directory datasets
-    ├── model/               # ADMM, DRUNet, modular model
+    ├── model/               # ADMM, FISTA, DRUNet, Real-ESRGAN, modular model
     ├── loss/                # MSE + LPIPS loss
     ├── metrics/             # PSNR, SSIM, LPIPS, MSE
     ├── trainer/             # trainer and inferencer

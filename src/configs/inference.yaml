@@ -4,6 +4,7 @@ defaults:
   - datasets: digicam_eval
   - dataloader: lensless
   - transforms: empty
+  - writer: cometml
   - _self_
 inferencer:
   device_tensors: ["measurement", "psf", "gt"]

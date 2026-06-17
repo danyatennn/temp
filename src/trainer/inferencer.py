@@ -26,6 +26,7 @@ class Inferencer(BaseTrainer):
         metrics=None,
         batch_transforms=None,
         skip_model_load=False,
+        writer=None,
     ):
         """
         Args:
@@ -37,6 +38,7 @@ class Inferencer(BaseTrainer):
             metrics (dict | None): metrics for inference.
             batch_transforms (dict | None): batch transforms.
             skip_model_load (bool): if True, do not load a checkpoint.
+            writer (CometMLWriter | None): if set, log metrics and images.
         """
         assert (
             skip_model_load or config.inferencer.get("from_pretrained") is not None
@@ -49,6 +51,7 @@ class Inferencer(BaseTrainer):
 
         self.model = model
         self.batch_transforms = batch_transforms
+        self.writer = writer
 
         self.evaluation_dataloaders = {k: v for k, v in dataloaders.items()}
 
@@ -107,6 +110,9 @@ class Inferencer(BaseTrainer):
             image = (image * 255).astype(np.uint8)
             Image.fromarray(image).save(self.save_path / f"{batch['id'][i]}.png")
 
+        if self.writer is not None and batch_idx == 0:
+            self._log_predictions(batch)
+
         return batch
 
     def _inference_part(self, part, dataloader):
@@ -127,6 +133,9 @@ class Inferencer(BaseTrainer):
 
         self.save_path.mkdir(exist_ok=True, parents=True)
 
+        if self.writer is not None:
+            self.writer.set_step(0, mode=part)
+
         with torch.no_grad():
             for batch_idx, batch in tqdm(
                 enumerate(dataloader), desc=part, total=len(dataloader)
@@ -138,6 +147,47 @@ class Inferencer(BaseTrainer):
                     metrics=self.evaluation_metrics,
                 )
 
-        if self.evaluation_metrics is not None:
-            return self.evaluation_metrics.result()
-        return {}
+        if self.evaluation_metrics is None:
+            return {}
+
+        result = self.evaluation_metrics.result()
+        if self.writer is not None:
+            for name, value in result.items():
+                self.writer.add_scalar(name, value)
+        return result
+
+    def _log_predictions(self, batch, n_examples=4):
+        """
+        Log a few measurement / reconstruction / ground-truth examples.
+
+        Args:
+            batch (dict): batch with the reconstruction (and ground truth).
+            n_examples (int): number of examples to log.
+        """
+        n_examples = min(n_examples, batch["measurement"].shape[0])
+
+        reconstruction = crop_roi(batch["reconstruction"]).clamp(0, 1)
+        measurement = batch["measurement"]
+        measurement = measurement / (
+            measurement.amax(dim=(-3, -2, -1), keepdim=True) + 1e-6
+        )
+        gt = crop_roi(batch["gt"]).clamp(0, 1) if "gt" in batch else None
+
+        for i in range(n_examples):
+            sample_id = batch["id"][i]
+            self.writer.add_image(
+                f"measurement/{sample_id}", self._to_image(measurement[i])
+            )
+            self.writer.add_image(
+                f"reconstruction/{sample_id}", self._to_image(reconstruction[i])
+            )
+            if gt is not None:
+                self.writer.add_image(f"gt/{sample_id}", self._to_image(gt[i]))
+
+    @staticmethod
+    def _to_image(tensor):
+        """
+        Convert a (C, H, W) tensor to a uint8 (H, W, C) numpy image.
+        """
+        array = tensor.detach().clamp(0, 1).permute(1, 2, 0).cpu().numpy()
+        return (array * 255).astype("uint8")

@@ -133,3 +133,121 @@ python3 measure_speed.py model=modular_pre_post
 ```
 
 Report the per-method numbers in the table above.
+
+## 7. Bonus tasks
+
+### 7.1 A non-ADMM solver: FISTA (1.0 pt)
+
+We implement FISTA (Fast Iterative Shrinkage-Thresholding Algorithm) from scratch
+in [`src/model/fista.py`](src/model/fista.py), in both a fixed
+([`fista`](src/configs/model/fista.yaml), 100 iters) and a learnable unrolled
+([`fista_unrolled`](src/configs/model/fista_unrolled.yaml), 20 iters) variant. It
+minimizes the *same* objective as our ADMM — data fidelity
+`0.5 ||C H x - b||^2`, an anisotropic-TV prior, and a non-negativity
+constraint — and uses the *same* padded Fourier forward model, so the comparison
+is apples-to-apples.
+
+**How it differs from ADMM.** ADMM uses variable splitting: it introduces
+auxiliary variables (one for the data/crop term, one for the TV term, one for
+non-negativity) and dual variables, and each iteration solves these subproblems
+in closed form — in particular the `x`-update is a single Fourier-domain division
+because every quadratic term diagonalizes. FISTA is an *accelerated proximal
+gradient* method: it takes one gradient step on the smooth data term (with the
+Lipschitz step size `1/L`, where `L = max |FFT(psf)|^2`), applies the proximal
+operator of the regularizer, and adds Nesterov momentum (`y_k`) for `O(1/k^2)`
+convergence. There are no dual variables and no penalty parameters. Because the
+anisotropic-TV prox has no closed form, we solve it with a few Chambolle dual
+iterations, and the non-negativity constraint is applied by clamping after the
+TV prox.
+
+**Pros.** Simpler and lighter than ADMM: only two state tensors (`x`, `y`) instead
+of three splits plus three duals, and only one real hyperparameter (the TV weight
+`tau`) — the step size is set automatically from the PSF, whereas ADMM needs three
+penalty parameters `mu1, mu2, mu3`. The acceleration gives a fast `O(1/k^2)`
+objective decrease.
+
+**Cons.** FISTA is most natural for *one* smooth term plus *one* prox. With two
+non-smooth terms (TV *and* non-negativity) the combination is not exact — we
+approximate the joint prox by clamping after the TV prox, whereas ADMM handles
+each term exactly through its own split. The TV prox itself needs an inner loop
+(extra compute per iteration). Finally, the crop operator sits inside the data
+term, so every gradient step needs a full forward+adjoint convolution; ADMM turns
+the crop into a closed-form diagonal update. For ill-conditioned PSFs the `1/L`
+step is small and convergence slows, where ADMM's penalties act as a
+preconditioner.
+
+### 7.2 Pretrained restoration on top of ADMM-100: Real-ESRGAN (0.5 pt)
+
+We run a general-purpose, pretrained restoration GAN — Real-ESRGAN — on top of
+the fixed (non-unrolled) ADMM-100 reconstruction
+([`admm100_realesrgan`](src/configs/model/admm100_realesrgan.yaml)). The RRDBNet
+generator is reimplemented in [`src/model/realesrgan.py`](src/model/realesrgan.py)
+with the official layer names, and the published pretrained weights
+(`RealESRGAN_x4plus`, 16.7M parameters) are loaded into it. The network upscales
+the ADMM output by 4x and we resize back to the original resolution, so it acts
+as a same-resolution restorer; it is **frozen** for this task.
+
+**How it differs.** Unlike the modular learned methods, here the inversion is the
+classical ADMM-100 (fixed) and the learned component is a *generic* restoration
+network that was *not* trained for lensless imaging and is *not* unrolled with the
+inversion. It is a pure post-hoc enhancement using a generative image prior.
+
+**Pros.** No training required; it reuses a powerful prior learned from millions
+of natural images, so it can sharpen edges and synthesize plausible texture,
+typically improving the perceptual metric (LPIPS). It is trivial to attach to any
+reconstruction.
+
+**Cons.** Domain mismatch: Real-ESRGAN was trained to undo real-photo
+degradations (blur, noise, JPEG), not lensless/ADMM artifacts (color casts,
+ringing, low contrast), so frozen it may fail to remove lensless-specific
+artifacts and can *hallucinate* detail that is not in the scene. Such
+hallucinations hurt fidelity metrics (PSNR, MSE) even when they look sharper. It
+is also a large, slow model, and the 4x upscale-then-downscale is wasteful.
+
+### 7.3 Fine-tuning the restoration network (extra 1.0 pt)
+
+We fine-tune the Real-ESRGAN generator on the training split
+([`admm100_realesrgan_ft`](src/configs/model/admm100_realesrgan_ft.yaml)),
+unfreezing its parameters and training with the same `MSE + LPIPS` ROI loss as the
+other learned models, using the ADMM-100 output as input. The inversion stays
+fixed and is run without gradients, so only the generator is optimized. Training
+uses a small learning rate (`1e-5`) to adapt the prior without destroying it:
+
+```bash
+python3 train.py -cn=lensless model=admm100_realesrgan_ft \
+    optimizer.lr=1e-5 trainer.n_epochs=10 dataloader.batch_size=2 \
+    writer.run_name=realesrgan_ft
+```
+
+**How it differs / pros.** Fine-tuning closes the domain gap of Section 7.2: the
+generator learns the actual ADMM-100 artifact distribution, so it should improve
+*both* fidelity and perceptual quality over the frozen model, while still
+benefiting from the pretrained initialization (faster, better than training such
+a large network from scratch on limited data).
+
+**Cons.** Training is slow because ADMM-100 is recomputed every step (100
+FFT-based iterations per batch, even though no gradient flows through it). The
+network is large (16.7M parameters) and can overfit or drift away from the
+generative prior if over-trained or the learning rate is too high; depending on
+the loss weights it may also regress toward MSE-style smoothing and lose the GAN's
+sharpness.
+
+### 7.4 Bonus results
+
+| Method | PSNR ↑ | SSIM ↑ | LPIPS ↓ | MSE ↓ | Speed (ms) |
+|---|---|---|---|---|---|
+| FISTA-100 (fixed) | | | | | |
+| Unrolled FISTA-20 | | | | | |
+| ADMM-100 + Real-ESRGAN (frozen) | | | | | |
+| ADMM-100 + Real-ESRGAN (fine-tuned) | | | | | |
+
+Expected trends (from the analysis above):
+
+- FISTA-100 should be close to ADMM-100 on fidelity (same objective), possibly a
+  little lower because of the approximate non-negativity handling; unrolled
+  FISTA-20 should track unrolled ADMM-20.
+- Frozen Real-ESRGAN on ADMM-100 should improve perceptual sharpness (LPIPS) but
+  may not improve — or may even hurt — PSNR/MSE due to hallucination and domain
+  mismatch.
+- Fine-tuned Real-ESRGAN should beat the frozen version on all metrics and become
+  competitive with the modular post-processor model.
