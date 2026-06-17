@@ -1,0 +1,224 @@
+# Lensless Computational Imaging
+
+Reconstruction of images from lensless (mask-based) camera measurements. This
+repository reproduces and compares classic and learned reconstruction
+algorithms on the
+[DigiCam-Mirflickr-MultiMask-10K](https://huggingface.co/datasets/bezzam/DigiCam-Mirflickr-MultiMask-10K)
+dataset, following:
+
+- [Towards Robust and Generalizable Lensless Imaging with Modular Learned Reconstruction](https://arxiv.org/abs/2502.01102)
+- [Learned reconstructions for practical mask-based lensless imaging](https://arxiv.org/abs/1908.11502)
+
+The project is built on the
+[PyTorch Project Template](https://github.com/Blinorot/pytorch_project_template).
+
+## Contents
+
+- [About](#about)
+- [Methods](#methods)
+- [Installation](#installation)
+- [Dataset](#dataset)
+- [Training](#training)
+- [Inference and metrics](#inference-and-metrics)
+- [Reconstruction speed](#reconstruction-speed)
+- [Checkpoints](#checkpoints)
+- [Demo](#demo)
+- [Project structure](#project-structure)
+
+## About
+
+A lensless camera replaces the lens with a thin mask in front of the sensor.
+Each scene point is mapped to a diffuse pattern on the sensor (the point spread
+function, PSF), so the measurement is a multiplexed encoding of the scene rather
+than an image. Recovering the scene is a large deconvolution problem
+
+```
+b = crop(psf * x) + noise
+```
+
+where `*` is a 2D convolution and `crop` restricts the output to the sensor
+size. We solve it with variable-splitting ADMM, with a learnable (unrolled)
+version, and with a modular pipeline that surrounds the inversion by learned
+pre- and post-processors.
+
+## Methods
+
+All methods are implemented as a single
+[`ModularReconstruction`](src/model/modular.py) model with an optional
+pre-processor, a camera inversion module ([unrolled ADMM](src/model/admm.py)),
+and an optional post-processor ([DRUNet](src/model/drunet.py)).
+
+| Config | Pre | Inversion | Post | Trainable params |
+|---|---|---|---|---|
+| [`admm100`](src/configs/model/admm100.yaml) | – | ADMM, 100 iters, fixed `mu=1e-4, tau=2e-4` | – | 0 |
+| [`unrolled_admm20`](src/configs/model/unrolled_admm20.yaml) | – | Unrolled ADMM, 20 iters, learnable | – | 80 |
+| [`modular_pre_post`](src/configs/model/modular_pre_post.yaml) | DRUNet 4.1M | Unrolled ADMM, 5 iters | DRUNet 4.1M | ~8.1M |
+| [`modular_pre`](src/configs/model/modular_pre.yaml) | DRUNet 8.2M | Unrolled ADMM, 5 iters | – | ~8.2M |
+| [`modular_post`](src/configs/model/modular_post.yaml) | – | Unrolled ADMM, 5 iters | DRUNet 8.2M | ~8.2M |
+
+Implementation notes:
+
+- The ADMM uses an anisotropic TV regularizer with circular finite differences
+  and computes all convolutions in the Fourier domain. The crop is handled by
+  working on a `2H x 2W` padded space with the scene centered and cropping after
+  the iterations. The initial estimate is all zeros.
+- DRUNet is a denoising residual U-Net with four scales, four residual blocks
+  per scale, identity skip connections, and a global residual connection.
+- Training loss is `MSE + LPIPS (VGG)` computed on the region of interest (ROI).
+- Metrics are PSNR, SSIM, LPIPS (VGG), and MSE, also computed on the ROI.
+
+## Installation
+
+```bash
+# (optional) create an environment
+python3 -m venv project_env
+source project_env/bin/activate
+
+# install dependencies
+pip install -r requirements.txt
+
+# (optional) install pre-commit hooks
+pre-commit install
+```
+
+The device is chosen automatically: CUDA if available, then MPS, then CPU.
+
+## Dataset
+
+The training and evaluation data are the `train` and `test` splits of
+[DigiCam-Mirflickr-MultiMask-10K](https://huggingface.co/datasets/bezzam/DigiCam-Mirflickr-MultiMask-10K).
+The dataset is downloaded automatically on first use:
+
+```python
+from datasets import load_dataset
+ds = load_dataset("bezzam/DigiCam-Mirflickr-MultiMask-10K")
+```
+
+PSFs are stored as mask patterns. They are simulated from the masks (with
+`waveprop`) and cached once per unique mask, so PSF simulation does not slow down
+training. The required preprocessing (rotation of the measurement, placing the
+ground truth on the display canvas) reuses the helpers in `lensless_helpers/`.
+
+## Training
+
+```bash
+python3 train.py -cn=lensless model=MODEL writer.run_name=RUN_NAME
+```
+
+`MODEL` is one of `unrolled_admm20`, `modular_pre_post`, `modular_pre`,
+`modular_post` (the `admm100` baseline is parameter-free and is only used for
+inference). Examples:
+
+```bash
+python3 train.py -cn=lensless model=unrolled_admm20  writer.run_name=unrolled_admm20
+python3 train.py -cn=lensless model=modular_pre_post writer.run_name=modular_pre_post
+python3 train.py -cn=lensless model=modular_pre      writer.run_name=modular_pre
+python3 train.py -cn=lensless model=modular_post     writer.run_name=modular_post
+```
+
+Useful overrides:
+
+- `trainer.n_epochs=N` — number of epochs (default 25).
+- `dataloader.batch_size=B` — reduce if you run out of memory (default 4).
+- `datasets.test.limit=K` — number of test images used for per-epoch monitoring.
+- `writer=wandb` — log to Weights & Biases instead of Comet ML.
+
+Metrics, losses, learning rate, and reconstruction examples are logged every
+`trainer.log_step` steps and after every epoch. Checkpoints are saved every
+`trainer.save_period` epochs and the best one (by `test_PSNR`) is saved as
+`saved/RUN_NAME/model_best.pth`.
+
+Logging requires a Comet ML API key (`comet_ml.login()` will prompt for it) or
+a W&B login.
+
+## Inference and metrics
+
+Run a trained model on a dataset and save the reconstructions:
+
+```bash
+python3 inference.py \
+    model=modular_pre_post \
+    inferencer.from_pretrained=saved/modular_pre_post/model_best.pth \
+    inferencer.save_path=data/saved/modular_pre_post
+```
+
+For the classic ADMM-100 baseline there is no checkpoint:
+
+```bash
+python3 inference.py \
+    model=admm100 \
+    inferencer.from_pretrained=null \
+    inferencer.save_path=data/saved/admm100
+```
+
+Run on a custom directory (see [Demo](#demo) for the format):
+
+```bash
+python3 inference.py \
+    model=modular_pre_post \
+    inferencer.from_pretrained=saved/modular_pre_post/model_best.pth \
+    datasets=custom_dir datasets.test.data_dir=/path/to/data \
+    inferencer.save_path=/path/to/reconstructions
+```
+
+Reconstructions are saved as `ID.png` (the ROI) matching the input image id.
+
+Compute metrics between ground-truth and reconstructed images:
+
+```bash
+python3 calculate_metrics.py \
+    --ground_truth /path/to/data \
+    --reconstructions /path/to/reconstructions
+```
+
+The `--ground_truth` argument accepts either a directory of images or a data
+directory containing a `lensed/` subdirectory. It prints PSNR, SSIM, LPIPS, and
+MSE averaged over all matched images.
+
+## Reconstruction speed
+
+```bash
+python3 measure_speed.py model=admm100
+python3 measure_speed.py model=modular_pre_post
+```
+
+This reports the average reconstruction time per measurement.
+
+## Checkpoints
+
+Final checkpoints are hosted on Google Drive. Set the file ids in
+[`download_checkpoints.py`](download_checkpoints.py) and run:
+
+```bash
+python3 download_checkpoints.py --model all
+```
+
+Checkpoints are saved to `saved/<model>/model_best.pth`.
+
+## Demo
+
+[`demo.ipynb`](demo.ipynb) is a self-contained notebook (designed for Google
+Colab) that clones the repository, installs dependencies, downloads the
+checkpoints, runs inference on a user-provided `.zip` dataset (Google Drive
+link), visualizes samples, and computes the metrics.
+
+## Project structure
+
+```
+.
+├── train.py                 # training entry point
+├── inference.py             # inference + reconstruction saving
+├── calculate_metrics.py     # standalone metric computation
+├── measure_speed.py         # reconstruction speed measurement
+├── download_checkpoints.py  # checkpoint downloader
+├── demo.ipynb               # demo notebook
+├── lensless_helpers/        # provided preprocessing and PSF helpers
+└── src/
+    ├── configs/             # Hydra configs
+    ├── datasets/            # DigiCam and custom-directory datasets
+    ├── model/               # ADMM, DRUNet, modular model
+    ├── loss/                # MSE + LPIPS loss
+    ├── metrics/             # PSNR, SSIM, LPIPS, MSE
+    ├── trainer/             # trainer and inferencer
+    └── utils/               # helpers (ROI, device, io)
+```

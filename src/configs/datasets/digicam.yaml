@@ -1,0 +1,9 @@
+train:
+  _target_: src.datasets.DigiCamMirflickr
+  part: train
+  # cache_dir: /kaggle/working/hf_cache  # set to a persistent path on Kaggle/Colab
+test:
+  _target_: src.datasets.DigiCamMirflickr
+  part: test
+  limit: 500
+  # cache_dir: /kaggle/working/hf_cache
