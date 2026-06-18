@@ -72,7 +72,9 @@ run unrolled_admm20  model=unrolled_admm20  "${COMMON[@]}"
 # --- bonus models (trainable ones) ---
 run fista_unrolled   model=fista_unrolled   "${COMMON[@]}"
 # Real-ESRGAN fine-tuning is the slowest (runs ADMM-100 every step); kept last.
+# Short fine-tune: pretrained weights only need light adaptation.
 run realesrgan_ft    model=admm100_realesrgan_ft "${COMMON[@]}" \
-    optimizer.lr=1e-5 dataloader.batch_size=2
+    optimizer.lr=1e-5 dataloader.batch_size=2 \
+    trainer.n_epochs=3 trainer.epoch_len=500
 
 echo "=== [$(stamp)] ALL DONE ===" | tee -a "$MASTER"

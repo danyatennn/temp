@@ -2,7 +2,7 @@
 
 This report describes the experiments, compares the methods, and answers the
 questions from the homework. Empirical numbers, training-log links, and figures
-(metric curves, reconstructed images) are produced by the W&B / Comet ML runs and
+(metric curves, reconstructed images) are produced by the Comet ML runs and
 are referenced in the [Results](#results) section.
 
 ## 1. Experiments
@@ -92,7 +92,7 @@ Expected trends (from the papers and the design analysis above):
   the learned models (5–20 iterations) are much faster, with Pre+Post the
   slowest learned model (two U-Nets).
 
-**Training logs / curves / reconstructed images:** see the W&B / Comet ML
+**Training logs / curves / reconstructed images:** see the Comet ML
 report (link here). The runs log the loss, PSNR/SSIM/LPIPS/MSE curves, and
 reconstruction examples (measurement vs. ground truth vs. reconstruction) every
 epoch.

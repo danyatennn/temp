@@ -10,7 +10,6 @@ pandas
 torchmetrics
 lpips
 comet_ml
-wandb
 hydra-core
 datasets
 huggingface_hub

@@ -154,15 +154,14 @@ Useful overrides:
 - `trainer.n_epochs=N` — number of epochs (default 25).
 - `dataloader.batch_size=B` — reduce if you run out of memory (default 4).
 - `datasets.test.limit=K` — number of test images used for per-epoch monitoring.
-- `writer=wandb` — log to Weights & Biases instead of Comet ML.
 
 Metrics, losses, learning rate, and reconstruction examples are logged every
 `trainer.log_step` steps and after every epoch. Checkpoints are saved every
 `trainer.save_period` epochs and the best one (by `test_PSNR`) is saved as
 `saved/RUN_NAME/model_best.pth`.
 
-Logging requires a Comet ML API key (`comet_ml.login()` will prompt for it) or
-a W&B login.
+Logging requires a Comet ML API key (set the `COMET_API_KEY` environment
+variable or let `comet_ml.login()` prompt for it).
 
 ## Inference and metrics
 
