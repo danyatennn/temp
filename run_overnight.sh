@@ -31,7 +31,7 @@ MASTER="$LOGDIR/run.log"
 
 # overrides shared by every run
 COMMON=( "+datasets.train.cache_dir=$CACHE" "+datasets.test.cache_dir=$CACHE"
-         "trainer.n_epochs=$EPOCHS" )
+         "trainer.n_epochs=$EPOCHS" "trainer.override=True" )
 if [ "$TRAIN_LIMIT" -gt 0 ]; then
   COMMON+=( "+datasets.train.limit=$TRAIN_LIMIT" )
 fi
@@ -46,7 +46,8 @@ run () {
   NAME="$1"; shift
   echo "=== [$(stamp)] START $NAME ===" | tee -a "$MASTER"
   $PY train.py "$@" writer.run_name="$NAME" < /dev/null > "$LOGDIR/$NAME.log" 2>&1
-  echo "=== [$(stamp)] END   $NAME (exit $?) ===" | tee -a "$MASTER"
+  STATUS=$?
+  echo "=== [$(stamp)] END   $NAME (exit $STATUS) ===" | tee -a "$MASTER"
 }
 
 # --- smoke test: fail fast (also does the one-time dataset + PSF caching) ---
@@ -65,10 +66,8 @@ fi
 rm -rf saved/smoke_test
 echo "=== [$(stamp)] smoke test passed, starting full training ===" | tee -a "$MASTER"
 
-# --- required models (modular_pre_post already trained, skipped) ---
+# --- models to (re)train (modular_* already trained, skipped) ---
 run unrolled_admm20  model=unrolled_admm20  "${COMMON[@]}"
-run modular_pre      model=modular_pre      "${COMMON[@]}"
-run modular_post     model=modular_post     "${COMMON[@]}"
 
 # --- bonus models (trainable ones) ---
 run fista_unrolled   model=fista_unrolled   "${COMMON[@]}"
