@@ -152,12 +152,6 @@ class CometMLWriter:
         )
 
     def add_scalars(self, scalars):
-        """
-        Log several scalars to the experiment tracker.
-
-        Args:
-            scalars (dict): dict, containing scalar name and value.
-        """
         self.exp.log_metrics(
             {
                 self._object_name(scalar_name): scalar
