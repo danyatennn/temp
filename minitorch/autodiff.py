@@ -22,8 +22,12 @@ def central_difference(f: Any, *vals: Any, arg: int = 0, epsilon: float = 1e-6) 
     Returns:
         An approximation of $f'_i(x_0, \ldots, x_{n-1})$
     """
-    # TODO: Implement for Task 1.1.
-    raise NotImplementedError('Need to implement for Task 1.1')
+    vals_list = list(vals)
+    vals_plus = vals_list[:]
+    vals_minus = vals_list[:]
+    vals_plus[arg] = vals_list[arg] + epsilon
+    vals_minus[arg] = vals_list[arg] - epsilon
+    return (f(*vals_plus) - f(*vals_minus)) / (2 * epsilon)
 
 
 variable_count = 1
@@ -61,8 +65,20 @@ def topological_sort(variable: Variable) -> Iterable[Variable]:
     Returns:
         Non-constant Variables in topological order starting from the right.
     """
-    # TODO: Implement for Task 1.4.
-    raise NotImplementedError('Need to implement for Task 1.4')
+    order: List[Variable] = []
+    visited = set()
+
+    def visit(var: Variable) -> None:
+        if var.unique_id in visited or var.is_constant():
+            return
+        visited.add(var.unique_id)
+        if not var.is_leaf():
+            for parent in var.parents:
+                visit(parent)
+        order.insert(0, var)
+
+    visit(variable)
+    return order
 
 
 def backpropagate(variable: Variable, deriv: Any) -> None:
@@ -76,8 +92,21 @@ def backpropagate(variable: Variable, deriv: Any) -> None:
 
     No return. Should write to its results to the derivative values of each leaf through `accumulate_derivative`.
     """
-    # TODO: Implement for Task 1.4.
-    raise NotImplementedError('Need to implement for Task 1.4')
+    order = topological_sort(variable)
+    derivs = {variable.unique_id: deriv}
+
+    for var in order:
+        d = derivs[var.unique_id]
+        if var.is_leaf():
+            var.accumulate_derivative(d)
+        else:
+            for parent, parent_deriv in var.chain_rule(d):
+                if parent.is_constant():
+                    continue
+                if parent.unique_id in derivs:
+                    derivs[parent.unique_id] += parent_deriv
+                else:
+                    derivs[parent.unique_id] = parent_deriv
 
 
 @dataclass

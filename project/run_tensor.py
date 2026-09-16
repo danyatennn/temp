@@ -3,6 +3,8 @@ Be sure you have minitorch installed in you Virtual Env.
 >>> pip install -Ue .
 """
 
+import time
+
 import minitorch
 
 
@@ -76,6 +78,8 @@ class TensorTrain:
             correct = 0
             optim.zero_grad()
 
+            t0 = time.time()
+
             # Forward
             out = self.model.forward(X).view(data.N)
             prob = (out * y) + (out - 1.0) * (y - 1.0)
@@ -88,11 +92,14 @@ class TensorTrain:
             # Update
             optim.step()
 
+            elapsed = time.time() - t0
+
             # Logging
             if epoch % 10 == 0 or epoch == max_epochs:
                 y2 = minitorch.tensor(data.y)
                 correct = int(((out.detach() > 0.5) == y2).sum()[0])
                 log_fn(epoch, total_loss, correct, losses)
+                print(f"  time/epoch: {elapsed:.3f}s")
 
 
 if __name__ == "__main__":
